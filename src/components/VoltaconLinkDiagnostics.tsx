@@ -305,7 +305,7 @@ export const VoltaconLinkDiagnostics: React.FC<VoltaconLinkDiagnosticsProps> = (
             <div>
               <p className="font-semibold">Voltacon Inverter Disconnected / No Reply on {linkStatus?.devicePort || '/dev/hidraw0'}</p>
               <p className="text-slate-400 mt-0.5">
-                Strict Real Hardware Mode is active. Simulated data has been suppressed (0 W output shown). Connect the USB OTG cable or USB-to-RS232 adapter to your Raspberry Pi, verify <code className="text-rose-200 bg-white/5 px-1 py-0.5 rounded">dialout</code> group permissions, or switch back to Demo Mode.
+                Strict Real Hardware Mode is active. Simulated data has been suppressed: Inverter power is 0W, and Battery SOC & Core Temperatures have gone dead (<code className="text-rose-200 bg-white/5 px-1 py-0.5 rounded">--</code> / unmeasured) to ensure truthful diagnostics. Connect the USB OTG cable or USB-to-RS232 adapter to your Raspberry Pi, verify <code className="text-rose-200 bg-white/5 px-1 py-0.5 rounded">dialout</code> group permissions, or toggle back to Demo Mode.
               </p>
             </div>
           </div>
@@ -695,7 +695,7 @@ export const VoltaconLinkDiagnostics: React.FC<VoltaconLinkDiagnosticsProps> = (
                 {linkStatus.lastParsedQPIGS && (
                   <div className="pt-2 border-t border-white/5">
                     <div className="text-[11px] font-medium text-slate-400 mb-1.5">Parsed Telemetry Fields:</div>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[10px] font-mono">
+                    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-[10px] font-mono">
                       <div className="p-1.5 bg-white/5 rounded">
                         <span className="text-slate-500">AC Output:</span>{' '}
                         <span className="text-white font-bold">{linkStatus.lastParsedQPIGS.acOutputActivePowerWatts} W</span>
@@ -705,8 +705,12 @@ export const VoltaconLinkDiagnostics: React.FC<VoltaconLinkDiagnosticsProps> = (
                         <span className="text-white font-bold">{linkStatus.lastParsedQPIGS.acOutputVoltage} V</span>
                       </div>
                       <div className="p-1.5 bg-white/5 rounded">
-                        <span className="text-slate-500">Battery:</span>{' '}
-                        <span className="text-white font-bold">{linkStatus.lastParsedQPIGS.batteryVoltage} V ({linkStatus.lastParsedQPIGS.batteryCapacitySoc}%)</span>
+                        <span className="text-slate-500">Battery SOC:</span>{' '}
+                        <span className="text-white font-bold">{linkStatus.lastParsedQPIGS.batteryCapacitySoc}% ({linkStatus.lastParsedQPIGS.batteryVoltage}V)</span>
+                      </div>
+                      <div className="p-1.5 bg-white/5 rounded">
+                        <span className="text-slate-500">Heatsink:</span>{' '}
+                        <span className="text-white font-bold">{linkStatus.lastParsedQPIGS.inverterHeatSinkTempC} °C</span>
                       </div>
                       <div className="p-1.5 bg-white/5 rounded">
                         <span className="text-slate-500">PV Input:</span>{' '}

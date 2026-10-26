@@ -225,36 +225,52 @@ export const AtAGlanceDashboard: React.FC<AtAGlanceDashboardProps> = ({
         </div>
 
         {/* CARD 3: 48V BATTERY BANK */}
-        <div className="bg-[#151822] border border-emerald-500/20 rounded-2xl sm:rounded-3xl p-4 sm:p-5 flex flex-col justify-between shadow-sm relative overflow-hidden group">
+        <div className={`border rounded-2xl sm:rounded-3xl p-4 sm:p-5 flex flex-col justify-between shadow-sm relative overflow-hidden group ${
+          state.dcInput.stateOfCharge !== null
+            ? 'bg-[#151822] border-emerald-500/20'
+            : 'bg-[#12141c] border-white/10 opacity-80'
+        }`}>
           <div className="absolute top-0 right-0 w-24 h-24 bg-emerald-500/5 rounded-full blur-2xl group-hover:bg-emerald-500/10 transition-colors pointer-events-none" />
 
           <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2 text-emerald-400">
-              <BatteryCharging className="w-4 h-4 text-emerald-400" />
+            <div className={`flex items-center space-x-2 ${
+              state.dcInput.stateOfCharge !== null ? 'text-emerald-400' : 'text-slate-400'
+            }`}>
+              <BatteryCharging className="w-4 h-4" />
               <span className="text-[11px] font-bold uppercase tracking-wider font-mono">48V Battery</span>
             </div>
             <span className={`text-[10px] font-mono px-2 py-0.5 rounded-full ${
-              isCharging 
+              state.dcInput.stateOfCharge === null
+                ? 'bg-white/5 text-slate-500 border border-white/10'
+                : isCharging 
                 ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30' 
                 : 'bg-white/10 text-slate-300'
             }`}>
-              {isCharging ? 'CHARGING' : 'FLOAT'}
+              {state.dcInput.stateOfCharge === null ? 'NO SENSOR / DEAD' : isCharging ? 'CHARGING' : 'FLOAT'}
             </span>
           </div>
 
           <div className="my-2 sm:my-3">
             <div className="text-2xl sm:text-4xl font-extrabold text-white font-mono tracking-tight flex items-baseline space-x-1">
-              <span>{state.dcInput.stateOfCharge}</span>
-              <span className="text-sm sm:text-lg font-bold text-emerald-400">% SOC</span>
+              <span>{state.dcInput.stateOfCharge !== null ? state.dcInput.stateOfCharge : '--'}</span>
+              <span className={`text-sm sm:text-lg font-bold ${state.dcInput.stateOfCharge !== null ? 'text-emerald-400' : 'text-slate-500'}`}>% SOC</span>
             </div>
-            <p className="text-xs text-emerald-300/80 font-mono mt-1 font-medium">
-              {state.dcInput.voltage.toFixed(1)} V • {state.dcInput.batteryType.split(' ')[0]}
+            <p className="text-xs text-slate-400 font-mono mt-1 font-medium">
+              {state.dcInput.stateOfCharge !== null
+                ? `${state.dcInput.voltage.toFixed(1)} V • ${state.dcInput.batteryType.split(' ')[0]}`
+                : 'Link Down • Disconnected'}
             </p>
           </div>
 
           <div className="pt-2.5 border-t border-white/5 flex items-center justify-between text-[11px] font-mono text-slate-400">
-            <span>{state.dcInput.watts > 0 ? `+${state.dcInput.watts}W` : `${state.dcInput.watts}W`}</span>
-            <span>Temp: {state.dcInput.temperatureC}°C</span>
+            <span>
+              {state.dcInput.stateOfCharge !== null
+                ? (state.dcInput.watts > 0 ? `+${state.dcInput.watts}W` : `${state.dcInput.watts}W`)
+                : 'Power: --'}
+            </span>
+            <span>
+              Temp: {state.dcInput.temperatureC !== null && state.dcInput.temperatureC !== undefined ? `${state.dcInput.temperatureC}°C` : '--'}
+            </span>
           </div>
         </div>
 
@@ -293,16 +309,26 @@ export const AtAGlanceDashboard: React.FC<AtAGlanceDashboardProps> = ({
       <div className="bg-[#151822] border border-white/10 rounded-2xl sm:rounded-3xl p-3.5 sm:p-4 shadow-sm flex flex-col md:flex-row items-center justify-between gap-3 text-xs font-mono">
         <div className="flex flex-wrap items-center gap-3 sm:gap-4 text-slate-300">
           <div className="flex items-center space-x-2">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+            <span className={`w-2.5 h-2.5 rounded-full ${
+              state.hardwareStatus === 'connected' ? 'bg-emerald-400 animate-pulse' : 'bg-rose-500'
+            }`} />
             <span className="font-semibold text-white">System Status:</span>
-            <span className="text-emerald-400 font-bold">ALL SYSTEMS NOMINAL</span>
+            <span className={`font-bold ${
+              state.hardwareStatus === 'connected' ? 'text-emerald-400' : 'text-rose-400'
+            }`}>
+              {state.hardwareStatus === 'connected' 
+                ? (state.isSimulationMode ? 'DEMO SIMULATOR ACTIVE' : 'ALL SYSTEMS NOMINAL') 
+                : 'HARDWARE DISCONNECTED'}
+            </span>
           </div>
 
           <div className="hidden sm:inline-block text-slate-600">•</div>
 
           <div className="flex items-center space-x-1.5 text-slate-400">
             <span>Inverter Core Temp:</span>
-            <span className="font-bold text-slate-200">{state.thermal.inverterTempC}°C</span>
+            <span className={`font-bold ${state.thermal.inverterTempC !== null ? 'text-slate-200' : 'text-slate-500'}`}>
+              {state.thermal.inverterTempC !== null ? `${state.thermal.inverterTempC}°C` : '-- (Dead / Offline)'}
+            </span>
           </div>
 
           <div className="hidden sm:inline-block text-slate-600">•</div>

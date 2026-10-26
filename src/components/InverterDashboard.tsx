@@ -281,49 +281,65 @@ export const InverterDashboard: React.FC<InverterDashboardProps> = ({
         </div>
 
         {/* 2. 48V LiFePO4 Battery Bank */}
-        <div className="bg-[#151822] border border-white/10 rounded-3xl p-5 shadow-sm space-y-4">
+        <div className={`border rounded-3xl p-5 shadow-sm space-y-4 ${
+          state.dcInput.stateOfCharge !== null ? 'bg-[#151822] border-white/10' : 'bg-[#12141c] border-white/10 opacity-80'
+        }`}>
           <div className="flex items-center justify-between">
-            <div className="flex items-center space-x-2 text-rose-400">
+            <div className={`flex items-center space-x-2 ${state.dcInput.stateOfCharge !== null ? 'text-rose-400' : 'text-slate-400'}`}>
               <Heart className="w-5 h-5 fill-current" />
               <h3 className="font-bold text-sm text-white">48V Battery Bank</h3>
             </div>
-            <span className="text-[11px] font-mono font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full border border-emerald-500/30">
-              16S LiFePO4
+            <span className={`text-[11px] font-mono font-semibold px-2 py-0.5 rounded-full border ${
+              state.dcInput.stateOfCharge !== null
+                ? 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30'
+                : 'text-slate-500 bg-white/5 border-white/10'
+            }`}>
+              {state.dcInput.stateOfCharge !== null ? '16S LiFePO4' : 'OFFLINE / UNMEASURED'}
             </span>
           </div>
 
           <div className="flex items-baseline justify-between">
             <div className="flex items-baseline space-x-2">
               <span className="text-4xl sm:text-5xl font-extrabold text-white font-mono tracking-tight">
-                {state.dcInput.stateOfCharge}%
+                {state.dcInput.stateOfCharge !== null ? `${state.dcInput.stateOfCharge}%` : '--'}
               </span>
-              <span className="text-xs text-slate-400 font-mono">SOC</span>
+              <span className={`text-xs font-mono ${state.dcInput.stateOfCharge !== null ? 'text-slate-400' : 'text-slate-500'}`}>
+                {state.dcInput.stateOfCharge !== null ? 'SOC' : 'SOC (Dead)'}
+              </span>
             </div>
             <span className="text-sm font-mono px-3 py-1 rounded-full bg-[#10121a] border border-white/10 text-emerald-400 font-bold">
-              {state.dcInput.voltage} VDC
+              {state.dcInput.voltage > 0 ? `${state.dcInput.voltage} VDC` : '-- VDC'}
             </span>
           </div>
 
           {/* Battery level indicator */}
           <div className="w-full bg-[#10121a] rounded-full h-2.5 overflow-hidden border border-white/10">
             <div
-              className="h-full bg-emerald-400 rounded-full transition-all duration-500"
-              style={{ width: `${state.dcInput.stateOfCharge}%` }}
+              className={`h-full rounded-full transition-all duration-500 ${
+                state.dcInput.stateOfCharge !== null ? 'bg-emerald-400' : 'bg-slate-700'
+              }`}
+              style={{ width: `${state.dcInput.stateOfCharge !== null ? state.dcInput.stateOfCharge : 0}%` }}
             />
           </div>
 
           <div className="grid grid-cols-3 gap-2 pt-2 border-t border-white/10 font-mono text-center">
             <div className="bg-[#10121a] p-2.5 rounded-2xl border border-white/10">
               <span className="text-[10px] text-slate-400 uppercase block font-semibold">DC Draw</span>
-              <span className="text-sm font-bold text-white">{state.dcInput.current} A</span>
+              <span className="text-sm font-bold text-white">
+                {state.dcInput.stateOfCharge !== null ? `${state.dcInput.current} A` : '-- A'}
+              </span>
             </div>
             <div className="bg-[#10121a] p-2.5 rounded-2xl border border-white/10">
               <span className="text-[10px] text-slate-400 uppercase block font-semibold">Power</span>
-              <span className="text-sm font-bold text-white">{state.dcInput.watts} W</span>
+              <span className="text-sm font-bold text-white">
+                {state.dcInput.stateOfCharge !== null ? `${state.dcInput.watts} W` : '-- W'}
+              </span>
             </div>
             <div className="bg-[#10121a] p-2.5 rounded-2xl border border-white/10">
               <span className="text-[10px] text-slate-400 uppercase block font-semibold">Temp</span>
-              <span className="text-sm font-bold text-white">{state.dcInput.temperatureC} °C</span>
+              <span className="text-sm font-bold text-white">
+                {state.dcInput.temperatureC !== null && state.dcInput.temperatureC !== undefined ? `${state.dcInput.temperatureC} °C` : '-- °C'}
+              </span>
             </div>
           </div>
         </div>
@@ -474,15 +490,21 @@ export const InverterDashboard: React.FC<InverterDashboardProps> = ({
           <div className="grid grid-cols-3 gap-2.5 font-mono text-center">
             <div className="bg-[#10121a] p-3 rounded-2xl border border-white/10">
               <span className="text-[10px] text-slate-400 uppercase block font-medium">Core Temp</span>
-              <span className="text-base font-bold text-white">{state.thermal.inverterTempC} °C</span>
+              <span className={`text-base font-bold ${state.thermal.inverterTempC !== null ? 'text-white' : 'text-slate-500'}`}>
+                {state.thermal.inverterTempC !== null ? `${state.thermal.inverterTempC} °C` : '-- °C'}
+              </span>
             </div>
             <div className="bg-[#10121a] p-3 rounded-2xl border border-white/10">
               <span className="text-[10px] text-slate-400 uppercase block font-medium">Transformer</span>
-              <span className="text-base font-bold text-white">{state.thermal.transformerTempC} °C</span>
+              <span className={`text-base font-bold ${state.thermal.transformerTempC !== null ? 'text-white' : 'text-slate-500'}`}>
+                {state.thermal.transformerTempC !== null ? `${state.thermal.transformerTempC} °C` : '-- °C'}
+              </span>
             </div>
             <div className="bg-[#10121a] p-3 rounded-2xl border border-white/10">
               <span className="text-[10px] text-slate-400 uppercase block font-medium">Fan Speed</span>
-              <span className="text-base font-bold text-sky-400">{state.thermal.fanSpeedPct}%</span>
+              <span className="text-base font-bold text-sky-400">
+                {state.thermal.inverterTempC !== null ? `${state.thermal.fanSpeedPct}%` : '0%'}
+              </span>
             </div>
           </div>
         </div>

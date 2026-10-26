@@ -73,9 +73,9 @@ export const AcousticFanStudio: React.FC<AcousticFanStudioProps> = ({
     }
   };
 
-  const dba = thermal.estimatedNoiseDba ?? 26.5;
-  const isWhisperQuiet = dba < 32;
-  const isModerateNoise = dba >= 32 && dba < 45;
+  const dba = thermal.estimatedNoiseDba !== null && thermal.estimatedNoiseDba !== undefined ? thermal.estimatedNoiseDba : null;
+  const isWhisperQuiet = dba !== null ? dba < 32 : true;
+  const isModerateNoise = dba !== null && dba >= 32 && dba < 45;
 
   return (
     <div className="bg-[#151822] border border-white/10 rounded-3xl p-5 sm:p-6 shadow-sm space-y-6">
@@ -91,13 +91,15 @@ export const AcousticFanStudio: React.FC<AcousticFanStudioProps> = ({
                 Thermal & Acoustic Noise Control
               </h3>
               <span className={`text-[10px] font-mono font-semibold px-2.5 py-0.5 rounded-full ${
-                isWhisperQuiet
+                dba === null
+                  ? 'bg-white/5 text-slate-500 border border-white/10'
+                  : isWhisperQuiet
                   ? 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'
                   : isModerateNoise
                   ? 'bg-amber-400/15 text-amber-300 border border-amber-400/30'
                   : 'bg-rose-500/15 text-rose-400 border border-rose-500/30'
               }`}>
-                {isWhisperQuiet ? 'WHISPER QUIET' : isModerateNoise ? 'MODERATE ACOUSTIC' : 'ACTIVE COOLING'}
+                {dba === null ? 'SENSORS OFFLINE' : isWhisperQuiet ? 'WHISPER QUIET' : isModerateNoise ? 'MODERATE ACOUSTIC' : 'ACTIVE COOLING'}
               </span>
             </div>
             <p className="text-xs text-slate-400 mt-0.5">
@@ -114,7 +116,8 @@ export const AcousticFanStudio: React.FC<AcousticFanStudioProps> = ({
           <div>
             <span className="text-[10px] font-mono text-slate-400 block font-medium">Sound Level</span>
             <span className="text-base sm:text-lg font-mono font-extrabold text-white">
-              ~{dba} <span className="text-xs font-normal text-slate-400">dBA</span>
+              {dba !== null ? `~${dba}` : '--'}{' '}
+              <span className="text-xs font-normal text-slate-400">dBA</span>
             </span>
           </div>
         </div>
@@ -128,11 +131,13 @@ export const AcousticFanStudio: React.FC<AcousticFanStudioProps> = ({
             <span>Inverter Heatsink</span>
             <Thermometer className="w-4 h-4 text-rose-400" />
           </div>
-          <div className="text-xl sm:text-2xl font-bold font-mono text-white">
-            {thermal.inverterTempC}°C
+          <div className={`text-xl sm:text-2xl font-bold font-mono ${thermal.inverterTempC !== null ? 'text-white' : 'text-slate-500'}`}>
+            {thermal.inverterTempC !== null ? `${thermal.inverterTempC}°C` : '-- °C'}
           </div>
-          <p className="text-[11px] text-emerald-400 font-medium">
-            {thermal.inverterTempC < 45 ? 'Below noisy fan trigger (48°C)' : 'Active internal threshold'}
+          <p className="text-[11px] font-medium text-slate-400">
+            {thermal.inverterTempC !== null
+              ? (thermal.inverterTempC < 45 ? 'Below noisy fan trigger (48°C)' : 'Active internal threshold')
+              : 'Sensor offline / disconnected'}
           </p>
         </div>
 
@@ -142,11 +147,11 @@ export const AcousticFanStudio: React.FC<AcousticFanStudioProps> = ({
             <span>Transformer Core</span>
             <Zap className="w-4 h-4 text-amber-400" />
           </div>
-          <div className="text-xl sm:text-2xl font-bold font-mono text-white">
-            {thermal.transformerTempC}°C
+          <div className={`text-xl sm:text-2xl font-bold font-mono ${thermal.transformerTempC !== null ? 'text-white' : 'text-slate-500'}`}>
+            {thermal.transformerTempC !== null ? `${thermal.transformerTempC}°C` : '-- °C'}
           </div>
           <p className="text-[11px] text-slate-400 font-mono">
-            Pure Sine Inverter Stage
+            {thermal.transformerTempC !== null ? 'Pure Sine Inverter Stage' : 'Sensor offline / disconnected'}
           </p>
         </div>
 

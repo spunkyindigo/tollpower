@@ -50,7 +50,7 @@ export const TollpowerNavbar: React.FC<TollpowerNavbarProps> = ({
 
   const isPowerOn = inverterState?.powerState === 'ON';
   const currentWatts = inverterState?.acOutput?.watts ?? 0;
-  const batterySoc = inverterState?.dcInput?.stateOfCharge ?? 88;
+  const batterySoc = inverterState?.hardwareStatus === 'disconnected' ? null : (inverterState?.dcInput?.stateOfCharge ?? null);
 
   // Build navItems dynamically based on enabled features, with "At a Glance" strictly left-most!
   const navItems = [
@@ -116,9 +116,9 @@ export const TollpowerNavbar: React.FC<TollpowerNavbarProps> = ({
                   {isPowerOn ? `${currentWatts} W Output` : 'Standby'}
                 </span>
                 <span>•</span>
-                <span className="flex items-center text-rose-400 font-mono">
-                  <Heart className="w-3 h-3 mr-1 fill-current" />
-                  {batterySoc}% SOC
+                <span className={`flex items-center font-mono ${batterySoc !== null ? 'text-rose-400' : 'text-slate-500'}`}>
+                  <Heart className={`w-3 h-3 mr-1 ${batterySoc !== null ? 'fill-current' : 'text-slate-600'}`} />
+                  {batterySoc !== null ? `${batterySoc}% SOC` : '-- SOC (Dead)'}
                 </span>
                 <span className="hidden md:inline">•</span>
                 <span className="hidden md:inline font-mono text-slate-400">

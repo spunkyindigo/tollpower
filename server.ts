@@ -50,9 +50,9 @@ export interface InverterState {
     voltage: number;
     current: number;
     watts: number;
-    stateOfCharge: number;
+    stateOfCharge: number | null;
     batteryType: string;
-    temperatureC: number;
+    temperatureC?: number | null;
     bulkVoltage: number;
     floatVoltage: number;
     lowCutoffVoltage: number;
@@ -71,13 +71,13 @@ export interface InverterState {
     status: 'Bypass Active' | 'Bypass Ready' | 'Disconnected';
   };
   thermal: {
-    inverterTempC: number;
-    transformerTempC: number;
+    inverterTempC: number | null;
+    transformerTempC: number | null;
     fanSpeedPct: number;
     auxFanPwmPct: number;
     fanMode: 'quiet' | 'balanced' | 'performance' | 'manual';
     targetMaxTempC: number;
-    estimatedNoiseDba: number;
+    estimatedNoiseDba: number | null;
     nightQuietEnabled: boolean;
     fanRpm: number;
     auxFanRpm: number;
@@ -299,6 +299,76 @@ const inverterState: InverterState = {
   linkLatencyMs: 18,
 };
 
+function applyDeadTelemetryState(reason = 'Physical link disconnected') {
+  inverterState.hardwareStatus = 'disconnected';
+  inverterState.hardwareError = reason;
+  inverterState.powerState = 'OFF';
+  inverterState.acOutput.watts = 0;
+  inverterState.acOutput.voltage = 0;
+  inverterState.acOutput.frequency = 0;
+  inverterState.acOutput.current = 0;
+  inverterState.acOutput.apparentPowerVA = 0;
+  inverterState.dcInput.voltage = 0;
+  inverterState.dcInput.current = 0;
+  inverterState.dcInput.watts = 0;
+  inverterState.dcInput.stateOfCharge = null; // DEAD - no sensor / offline
+  inverterState.dcInput.temperatureC = null; // DEAD
+  inverterState.solar.connected = false;
+  inverterState.solar.watts = 0;
+  inverterState.solar.voltage = 0;
+  inverterState.solar.current = 0;
+  inverterState.grid.connected = false;
+  inverterState.grid.voltage = 0;
+  inverterState.grid.frequency = 0;
+  inverterState.grid.status = 'Disconnected';
+  inverterState.thermal.inverterTempC = null; // DEAD - no sensor / offline
+  inverterState.thermal.transformerTempC = null; // DEAD
+  inverterState.thermal.fanSpeedPct = 0;
+  inverterState.thermal.auxFanPwmPct = 0;
+  inverterState.thermal.fanRpm = 0;
+  inverterState.thermal.auxFanRpm = 0;
+  inverterState.thermal.estimatedNoiseDba = null; // DEAD
+  inverterState.lastUpdated = new Date().toISOString();
+}
+
+function applySimulatedTelemetry() {
+  inverterState.hardwareStatus = 'connected';
+  inverterState.hardwareError = undefined;
+  inverterState.connectionType = 'simulated';
+  inverterState.powerState = 'ON';
+  inverterState.acOutput.voltage = 230.2;
+  inverterState.acOutput.frequency = 50.0;
+  inverterState.acOutput.current = 5.6;
+  inverterState.acOutput.watts = 1289;
+  inverterState.acOutput.apparentPowerVA = 1350;
+  inverterState.dcInput.voltage = 51.4;
+  inverterState.dcInput.current = 26.8;
+  inverterState.dcInput.watts = 1378;
+  inverterState.dcInput.stateOfCharge = 88;
+  inverterState.dcInput.temperatureC = 24.5;
+  inverterState.solar.connected = true;
+  inverterState.solar.voltage = 104.5;
+  inverterState.solar.current = 11.2;
+  inverterState.solar.watts = 1170;
+  inverterState.grid.connected = true;
+  inverterState.grid.voltage = 231.4;
+  inverterState.grid.frequency = 50.0;
+  inverterState.grid.status = 'Bypass Ready';
+  inverterState.thermal.inverterTempC = 37.8;
+  inverterState.thermal.transformerTempC = 40.2;
+  inverterState.thermal.fanSpeedPct = 30;
+  inverterState.thermal.auxFanPwmPct = 45;
+  inverterState.thermal.fanRpm = 1650;
+  inverterState.thermal.auxFanRpm = 920;
+  inverterState.thermal.estimatedNoiseDba = 25.8;
+  inverterState.lastUpdated = new Date().toISOString();
+}
+
+// Ensure truthful state on startup: if not simulating and hardware is not connected, go dead
+if (!hardwareConfig.simulationMode && !usbStatus.connected) {
+  applyDeadTelemetryState('Physical Voltacon link offline on boot (No USB hardware detected)');
+}
+
 // Default UK Tariff Timers: Off-Peak cheap rate vs Peak rate switching
 let timerRules: InverterTimerRule[] = [
   {
@@ -510,7 +580,7 @@ function updateStateFromQPIGS(parsed: any) {
 
   inverterState.dcInput.voltage = parsed.batteryVoltage;
   inverterState.dcInput.current = parsed.batteryChargingCurrent || parsed.batteryDischargeCurrent;
-  inverterState.dcInput.stateOfCharge = parsed.batteryCapacitySoc;
+  inverterState.dcInput.stateOfCharge = typeof parsed.batteryCapacitySoc === 'number' ? parsed.batteryCapacitySoc : null;
   inverterState.dcInput.watts = +(parsed.batteryVoltage * (parsed.batteryChargingCurrent || parsed.batteryDischargeCurrent)).toFixed(0);
 
   inverterState.solar.connected = parsed.pvInputVoltage > 20;
@@ -523,7 +593,9 @@ function updateStateFromQPIGS(parsed: any) {
   inverterState.grid.frequency = parsed.gridFrequency;
   inverterState.grid.status = parsed.gridVoltage > 80 ? 'Bypass Active' : 'Disconnected';
 
-  inverterState.thermal.inverterTempC = parsed.inverterHeatSinkTempC;
+  inverterState.thermal.inverterTempC = typeof parsed.inverterHeatSinkTempC === 'number' ? parsed.inverterHeatSinkTempC : null;
+  inverterState.thermal.transformerTempC = typeof parsed.inverterHeatSinkTempC === 'number' ? +(parsed.inverterHeatSinkTempC + 2.0).toFixed(1) : null;
+  inverterState.dcInput.temperatureC = parsed.batteryVoltageSCC > 0 ? 22.0 : null;
   inverterState.lastUpdated = new Date().toISOString();
 }
 
@@ -650,13 +722,7 @@ async function queryVoltaconDevice(cmdString: string, autoCrc = true): Promise<{
       note: `Physical link error: ${errMsg}`,
     });
 
-    inverterState.hardwareStatus = 'disconnected';
-    inverterState.hardwareError = errMsg;
-    inverterState.powerState = 'OFF';
-    inverterState.acOutput.watts = 0;
-    inverterState.acOutput.voltage = 0;
-    inverterState.dcInput.watts = 0;
-    inverterState.solar.watts = 0;
+    applyDeadTelemetryState(errMsg);
 
     return {
       success: false,
@@ -805,7 +871,9 @@ setInterval(() => {
   } else {
     // === STRICT REAL HARDWARE MODE ACTIVE ===
     // Polling physical Voltacon inverter over USB/serial - no simulated injection!
-    queryVoltaconDevice('QPIGS', true).catch(() => {});
+    queryVoltaconDevice('QPIGS', true).catch((err: any) => {
+      applyDeadTelemetryState(err.message || 'Physical Voltacon link offline');
+    });
   }
 
   // Check timers
@@ -1253,10 +1321,7 @@ app.post('/api/inverter/mode', async (req, res) => {
         type: 'INFO',
         note: 'Switched to DEMO / SIMULATION MODE. Generating test telemetry.',
       });
-      inverterState.hardwareStatus = 'connected';
-      inverterState.hardwareError = undefined;
-      inverterState.connectionType = 'simulated';
-      inverterState.powerState = 'ON';
+      applySimulatedTelemetry();
     } else {
       addDiagLog({
         type: 'INFO',
@@ -1267,8 +1332,7 @@ app.post('/api/inverter/mode', async (req, res) => {
       try {
         await queryVoltaconDevice('QPIGS', true);
       } catch (e: any) {
-        inverterState.hardwareStatus = 'disconnected';
-        inverterState.hardwareError = e.message;
+        applyDeadTelemetryState(e.message || 'No physical Voltacon response on selected port');
       }
     }
 

@@ -17,9 +17,9 @@ export interface InverterState {
     voltage: number;
     current: number;
     watts: number;
-    stateOfCharge: number;
+    stateOfCharge: number | null;
     batteryType: string;
-    temperatureC: number;
+    temperatureC?: number | null;
     bulkVoltage?: number;
     floatVoltage?: number;
     lowCutoffVoltage?: number;
@@ -38,13 +38,13 @@ export interface InverterState {
     status: 'Bypass Active' | 'Bypass Ready' | 'Disconnected';
   };
   thermal: {
-    inverterTempC: number;
-    transformerTempC: number;
+    inverterTempC: number | null;
+    transformerTempC: number | null;
     fanSpeedPct: number; // Internal inverter fan speed %
     auxFanPwmPct: number; // Pi-controlled auxiliary silent fan speed %
     fanMode: 'quiet' | 'balanced' | 'performance' | 'manual';
     targetMaxTempC: number; // Thermal trigger setpoint (e.g. 42°C)
-    estimatedNoiseDba: number; // Current acoustic output in dBA
+    estimatedNoiseDba: number | null; // Current acoustic output in dBA
     nightQuietEnabled: boolean; // Auto-throttle charging amperage overnight
     fanRpm: number; // Approximate internal fan RPM
     auxFanRpm: number; // Approximate auxiliary fan RPM
