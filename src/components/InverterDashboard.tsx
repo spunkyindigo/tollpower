@@ -23,17 +23,20 @@ import {
   Radio
 } from 'lucide-react';
 import { InverterState } from '../types/tollpower';
+import { AppSettings } from '../types/settings';
 import { sfx } from '../utils/sfx';
 import { AcousticFanStudio } from './AcousticFanStudio';
 
 interface InverterDashboardProps {
   state: InverterState;
+  settings?: AppSettings;
   onControl: (action: string, value?: string, relay?: string) => Promise<void>;
   onRefresh?: () => void;
 }
 
 export const InverterDashboard: React.FC<InverterDashboardProps> = ({
   state,
+  settings,
   onControl,
   onRefresh,
 }) => {
@@ -362,24 +365,31 @@ export const InverterDashboard: React.FC<InverterDashboardProps> = ({
         </div>
       </div>
 
-      {/* Relays & Socket Controls (Pixel Quick Settings Switch Tiles) */}
+      {/* Relays & Socket Controls */}
       <div className="bg-[#151822] border border-white/10 rounded-3xl p-5 shadow-sm space-y-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-2 text-white">
             <Sliders className="w-5 h-5 text-sky-400" />
-            <h3 className="font-bold text-sm">Remote Sockets & Relays Control</h3>
+            <h3 className="font-bold text-sm">
+              {settings?.features.externalRelays ? 'Remote Sockets & Relays Control' : 'Inverter AC Output Control'}
+            </h3>
           </div>
-          <span className="text-xs text-slate-400 font-mono">Pi Direct GPIO & USB Bridge</span>
+          <span className="text-xs text-slate-400 font-mono">
+            {settings?.features.externalRelays 
+              ? 'Pi Direct GPIO & Inverter Bridge' 
+              : 'Voltacon Pure Sine Direct Link'}
+          </span>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className={`grid grid-cols-1 ${settings?.features.externalRelays ? 'sm:grid-cols-2 lg:grid-cols-4' : 'sm:grid-cols-2'} gap-3`}>
           {[
             {
               key: 'mainAc',
               label: 'Main 230V AC Outlets',
-              desc: 'Protected inverter feed',
+              desc: 'Protected inverter feed (Built-in)',
               active: state.relays.mainAc,
               icon: Zap,
+              isNative: true,
             },
             {
               key: 'auxLoad',
@@ -387,6 +397,7 @@ export const InverterDashboard: React.FC<InverterDashboardProps> = ({
               desc: 'Water heater / dump load',
               active: state.relays.auxLoad,
               icon: Plug,
+              isNative: false,
             },
             {
               key: 'usbPorts',
@@ -394,6 +405,7 @@ export const InverterDashboard: React.FC<InverterDashboardProps> = ({
               desc: 'Pi and router rail',
               active: state.relays.usbPorts,
               icon: Radio,
+              isNative: false,
             },
             {
               key: 'coolingFan',
@@ -401,8 +413,11 @@ export const InverterDashboard: React.FC<InverterDashboardProps> = ({
               desc: `${state.thermal.fanSpeedPct}% PWM Speed`,
               active: state.relays.coolingFan,
               icon: Fan,
+              isNative: false,
             },
-          ].map(relay => (
+          ]
+            .filter(relay => relay.isNative || settings?.features.externalRelays)
+            .map(relay => (
             <div
               key={relay.key}
               className={`p-4 rounded-2xl border flex items-center justify-between transition-all ${
@@ -434,6 +449,17 @@ export const InverterDashboard: React.FC<InverterDashboardProps> = ({
               </button>
             </div>
           ))}
+
+          {!settings?.features.externalRelays && (
+            <div className="p-4 rounded-2xl border border-white/5 bg-[#10121a] flex items-center justify-between text-xs font-mono text-slate-400">
+              <div className="space-y-1">
+                <span className="text-slate-300 font-semibold block">Aux GPIO Relays Hidden</span>
+                <p className="text-[11px] text-slate-400">
+                  Minimal Pi + Voltacon profile active. External contactors can be toggled on in App Settings.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
       </div>
 
@@ -484,8 +510,10 @@ export const InverterDashboard: React.FC<InverterDashboardProps> = ({
         </div>
       </div>
       
-      {/* Acoustic & Thermal Noise Control Studio */}
-      <AcousticFanStudio state={state} onRefresh={onRefresh || (() => {})} />
+      {/* Acoustic & Thermal Noise Control Studio - Only rendered if fanNoiseAcoustics is enabled in settings */}
+      {settings?.features.fanNoiseAcoustics && (
+        <AcousticFanStudio state={state} onRefresh={onRefresh || (() => {})} />
+      )}
 
       {/* Events Log */}
       <div className="bg-[#151822] border border-white/10 rounded-3xl p-5 shadow-sm space-y-3">

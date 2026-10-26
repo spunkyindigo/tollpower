@@ -4,18 +4,17 @@ import {
   Activity, 
   Clock, 
   BarChart3, 
-  Cpu, 
   HelpCircle, 
   QrCode, 
   RefreshCw, 
   Volume2, 
   VolumeX, 
   Heart,
-  Sparkles,
-  Wifi,
-  GitBranch
+  Settings,
+  LayoutGrid
 } from 'lucide-react';
 import { InverterState, SystemInfo } from '../types/tollpower';
+import { AppSettings } from '../types/settings';
 import { sfx } from '../utils/sfx';
 
 interface TollpowerNavbarProps {
@@ -23,8 +22,8 @@ interface TollpowerNavbarProps {
   setActiveTab: (tab: string) => void;
   inverterState: InverterState | null;
   systemInfo: SystemInfo | null;
+  settings: AppSettings;
   onOpenQr: () => void;
-  onOpenGitModal: () => void;
   onRefresh: () => void;
   isRefreshing: boolean;
 }
@@ -34,29 +33,32 @@ export const TollpowerNavbar: React.FC<TollpowerNavbarProps> = ({
   setActiveTab,
   inverterState,
   systemInfo,
+  settings,
   onOpenQr,
-  onOpenGitModal,
   onRefresh,
   isRefreshing,
 }) => {
-  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [soundEnabled, setSoundEnabled] = useState(settings?.features?.soundEffects ?? true);
 
   const toggleSound = () => {
-    sfx.enabled = !soundEnabled;
-    setSoundEnabled(!soundEnabled);
-    if (!soundEnabled) sfx.playCoin();
+    const next = !soundEnabled;
+    sfx.enabled = next;
+    setSoundEnabled(next);
+    if (next) sfx.playCoin();
   };
 
   const isPowerOn = inverterState?.powerState === 'ON';
   const currentWatts = inverterState?.acOutput?.watts ?? 0;
   const batterySoc = inverterState?.dcInput?.stateOfCharge ?? 88;
 
+  // Build navItems dynamically based on enabled features, with "At a Glance" strictly left-most!
   const navItems = [
+    { id: 'glance', label: 'At a Glance', icon: LayoutGrid },
     { id: 'dashboard', label: 'Monitor & Control', icon: Activity },
-    { id: 'timers', label: 'Timers & Modes', icon: Clock },
-    { id: 'analytics', label: 'Long-Term Analytics', icon: BarChart3 },
-    { id: 'pi-system', label: 'Pi Host & Updates', icon: Cpu },
-    { id: 'guide', label: 'Setup Guide', icon: HelpCircle },
+    ...(settings?.features?.timersAndModes ? [{ id: 'timers', label: 'Timers & Modes', icon: Clock }] : []),
+    ...(settings?.features?.longTermAnalytics ? [{ id: 'analytics', label: 'Long-Term Analytics', icon: BarChart3 }] : []),
+    ...(settings?.features?.setupGuide ? [{ id: 'guide', label: 'Setup Guide', icon: HelpCircle }] : []),
+    { id: 'settings', label: 'App Settings', icon: Settings },
   ];
 
   return (
@@ -69,8 +71,14 @@ export const TollpowerNavbar: React.FC<TollpowerNavbarProps> = ({
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16 sm:h-18">
-          {/* Logo & Brand (Google Pixel clean + subtle Nintendo power icon) */}
-          <div className="flex items-center space-x-3.5">
+          {/* Logo & Brand */}
+          <div 
+            onClick={() => {
+              sfx.playClick();
+              setActiveTab('glance');
+            }}
+            className="flex items-center space-x-3.5 cursor-pointer group"
+          >
             <div className={`w-10 h-10 rounded-2xl flex items-center justify-center transition-all ${
               isPowerOn 
                 ? 'bg-amber-400/20 text-amber-300 border border-amber-400/40 shadow-[0_0_15px_rgba(251,191,36,0.2)]'
@@ -81,7 +89,7 @@ export const TollpowerNavbar: React.FC<TollpowerNavbarProps> = ({
 
             <div>
               <div className="flex items-center space-x-2">
-                <span className="font-extrabold text-white text-base sm:text-lg tracking-tight font-sans">
+                <span className="font-extrabold text-white text-base sm:text-lg tracking-tight font-sans group-hover:text-amber-300 transition-colors">
                   Tollpower
                 </span>
                 <span className={`text-[11px] font-mono font-bold px-2 py-0.5 rounded-full ${
@@ -110,7 +118,7 @@ export const TollpowerNavbar: React.FC<TollpowerNavbarProps> = ({
             </div>
           </div>
 
-          {/* Quick Settings Action Buttons (Pixel Style Tiles) */}
+          {/* Header Action Buttons (Pixel Style Tiles) */}
           <div className="flex items-center space-x-2">
             {/* Audio Toggle */}
             <button
@@ -137,18 +145,20 @@ export const TollpowerNavbar: React.FC<TollpowerNavbarProps> = ({
               <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin text-sky-400' : ''}`} />
             </button>
 
-            {/* Push to GitHub Button */}
+            {/* App Settings Shortcut */}
             <button
               onClick={() => {
                 sfx.playClick();
-                onOpenGitModal();
+                setActiveTab('settings');
               }}
-              className="inline-flex items-center px-3 py-2 text-xs font-semibold rounded-2xl bg-purple-500/15 hover:bg-purple-500/25 text-purple-300 border border-purple-500/30 transition-all active:scale-[0.98]"
-              title="Push to GitHub"
+              className={`p-2 rounded-2xl border transition-colors ${
+                activeTab === 'settings'
+                  ? 'bg-purple-500/20 border-purple-500/40 text-purple-300'
+                  : 'bg-white/5 border-white/10 text-slate-300 hover:text-white hover:bg-white/10'
+              }`}
+              title="App Settings (GitHub, Updates, Hardware Profile)"
             >
-              <GitBranch className="w-3.5 h-3.5 sm:mr-1.5" />
-              <span className="hidden sm:inline">Push to GitHub</span>
-              <span className="sm:hidden">GitHub</span>
+              <Settings className="w-4 h-4" />
             </button>
 
             {/* Phone & Tablet Connect (Pixel Pill button) */}
@@ -166,7 +176,7 @@ export const TollpowerNavbar: React.FC<TollpowerNavbarProps> = ({
           </div>
         </div>
 
-        {/* Pixel Material 3 Style Navigation Tabs */}
+        {/* Navigation Tabs - With At a Glance on the far left */}
         <nav className="flex space-x-1.5 overflow-x-auto pb-2 scrollbar-none pt-1">
           {navItems.map(tab => {
             const isActive = activeTab === tab.id;

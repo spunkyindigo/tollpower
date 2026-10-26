@@ -1,13 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { TollpowerNavbar } from './components/TollpowerNavbar';
+import { AtAGlanceDashboard } from './components/AtAGlanceDashboard';
 import { InverterDashboard } from './components/InverterDashboard';
 import { TimersAndModesStudio } from './components/TimersAndModesStudio';
 import { LongTermAnalytics } from './components/LongTermAnalytics';
-import { PiHostAndUpdater } from './components/PiHostAndUpdater';
 import { PiHowToGuide } from './components/PiHowToGuide';
+import { AppSettingsComponent } from './components/AppSettings';
 import { QrCodeModal } from './components/QrCodeModal';
 import { GitPushModal } from './components/GitPushModal';
 import { InverterState, InverterTimerRule, AnalyticsData, SystemInfo, GitStatus } from './types/tollpower';
+import { AppSettings } from './types/settings';
+import { loadSettings, saveSettings } from './utils/settingsStore';
+import { sfx } from './utils/sfx';
 
 // Default Fallback Voltacon 230V / 48V LiFePO4 State
 const DEFAULT_INVERTER_STATE: InverterState = {
@@ -87,7 +91,8 @@ const DEFAULT_INVERTER_STATE: InverterState = {
 };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<string>('dashboard');
+  const [activeTab, setActiveTab] = useState<string>('glance');
+  const [settings, setSettings] = useState<AppSettings>(loadSettings);
   const [inverterState, setInverterState] = useState<InverterState>(DEFAULT_INVERTER_STATE);
   const [timers, setTimers] = useState<InverterTimerRule[]>([]);
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
@@ -97,6 +102,33 @@ export default function App() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showQrModal, setShowQrModal] = useState(false);
   const [showGitModal, setShowGitModal] = useState(false);
+
+  // Sync SFX audio setting
+  useEffect(() => {
+    sfx.enabled = settings.features.soundEffects;
+  }, [settings.features.soundEffects]);
+
+  // Listen to external settings changes
+  useEffect(() => {
+    const handleSettingsChange = (e: any) => {
+      if (e.detail) setSettings(e.detail);
+    };
+    window.addEventListener('tollpower_settings_changed', handleSettingsChange);
+    return () => window.removeEventListener('tollpower_settings_changed', handleSettingsChange);
+  }, []);
+
+  // Safeguard: If current tab gets disabled, redirect to 'glance'
+  useEffect(() => {
+    if (activeTab === 'timers' && !settings.features.timersAndModes) {
+      setActiveTab('glance');
+    }
+    if (activeTab === 'analytics' && !settings.features.longTermAnalytics) {
+      setActiveTab('glance');
+    }
+    if (activeTab === 'guide' && !settings.features.setupGuide) {
+      setActiveTab('glance');
+    }
+  }, [settings, activeTab]);
 
   // Fetch telemetry from server
   const fetchTelemetry = async () => {
@@ -158,14 +190,14 @@ export default function App() {
     setTimeout(() => setIsRefreshing(false), 500);
   };
 
-  // Initial load and live 2.5s polling
+  // Initial load and live polling
   useEffect(() => {
     handleManualRefresh();
     const interval = setInterval(() => {
       fetchTelemetry();
-    }, 2500);
+    }, settings.pollingIntervalMs || 2500);
     return () => clearInterval(interval);
-  }, []);
+  }, [settings.pollingIntervalMs]);
 
   useEffect(() => {
     fetchAnalytics(analyticsRange);
@@ -254,6 +286,11 @@ export default function App() {
     }
   };
 
+  const handleUpdateSettings = (newSettings: AppSettings) => {
+    setSettings(newSettings);
+    saveSettings(newSettings);
+  };
+
   const lanUrl = systemInfo?.lanUrl || `http://${window.location.hostname}:3000`;
 
   return (
@@ -264,23 +301,37 @@ export default function App() {
         setActiveTab={setActiveTab}
         inverterState={inverterState}
         systemInfo={systemInfo}
+        settings={settings}
         onOpenQr={() => setShowQrModal(true)}
-        onOpenGitModal={() => setShowGitModal(true)}
         onRefresh={handleManualRefresh}
         isRefreshing={isRefreshing}
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-4 sm:py-6">
+        {/* At a Glance Dashboard (Left-most, headlines only, strictly no scrolling required) */}
+        {activeTab === 'glance' && (
+          <AtAGlanceDashboard
+            state={inverterState}
+            settings={settings}
+            onControl={handleControl}
+            onNavigateTab={setActiveTab}
+            onRefresh={handleManualRefresh}
+          />
+        )}
+
+        {/* Full Monitor & Control View */}
         {activeTab === 'dashboard' && (
           <InverterDashboard
             state={inverterState}
+            settings={settings}
             onControl={handleControl}
             onRefresh={handleManualRefresh}
           />
         )}
 
-        {activeTab === 'timers' && (
+        {/* Timers & Modes Studio (Conditional on feature switch) */}
+        {activeTab === 'timers' && settings.features.timersAndModes && (
           <TimersAndModesStudio
             inverterState={inverterState}
             timers={timers}
@@ -291,7 +342,8 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'analytics' && (
+        {/* Long-Term Analytics (Conditional on feature switch) */}
+        {activeTab === 'analytics' && settings.features.longTermAnalytics && (
           <LongTermAnalytics
             analytics={analytics}
             selectedRange={analyticsRange}
@@ -301,17 +353,21 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'pi-system' && (
-          <PiHostAndUpdater
+        {/* Pi Hardware & Setup Guide (Conditional on feature switch) */}
+        {activeTab === 'guide' && settings.features.setupGuide && (
+          <PiHowToGuide />
+        )}
+
+        {/* Dedicated App Settings (Hardware Profile, GitHub & Updates tucked away here, System Host) */}
+        {activeTab === 'settings' && (
+          <AppSettingsComponent
+            settings={settings}
+            onUpdateSettings={handleUpdateSettings}
             system={systemInfo}
             gitStatus={gitStatus}
             onRefreshSystem={fetchSystem}
             onOpenGitModal={() => setShowGitModal(true)}
           />
-        )}
-
-        {activeTab === 'guide' && (
-          <PiHowToGuide />
         )}
       </main>
 
