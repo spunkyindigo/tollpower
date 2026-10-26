@@ -11,7 +11,8 @@ import {
   VolumeX, 
   Heart,
   Settings,
-  LayoutGrid
+  LayoutGrid,
+  Cable
 } from 'lucide-react';
 import { InverterState, SystemInfo } from '../types/tollpower';
 import { AppSettings } from '../types/settings';
@@ -54,6 +55,7 @@ export const TollpowerNavbar: React.FC<TollpowerNavbarProps> = ({
   // Build navItems dynamically based on enabled features, with "At a Glance" strictly left-most!
   const navItems = [
     { id: 'glance', label: 'At a Glance', icon: LayoutGrid },
+    ...(settings?.features?.voltaconLink !== false ? [{ id: 'voltacon', label: 'Voltacon Link', icon: Cable }] : []),
     { id: 'dashboard', label: 'Monitor & Control', icon: Activity },
     ...(settings?.features?.timersAndModes ? [{ id: 'timers', label: 'Timers & Modes', icon: Clock }] : []),
     ...(settings?.features?.longTermAnalytics ? [{ id: 'analytics', label: 'Long-Term Analytics', icon: BarChart3 }] : []),
@@ -98,6 +100,14 @@ export const TollpowerNavbar: React.FC<TollpowerNavbarProps> = ({
                     : 'bg-white/10 text-slate-400 border border-white/10'
                 }`}>
                   {inverterState?.powerState || 'ONLINE'}
+                </span>
+
+                <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
+                  inverterState?.isSimulationMode
+                    ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                    : 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                }`}>
+                  {inverterState?.isSimulationMode ? 'DEMO' : 'LIVE'}
                 </span>
               </div>
               

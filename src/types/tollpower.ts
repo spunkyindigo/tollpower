@@ -70,6 +70,66 @@ export interface InverterState {
   lastUpdated: string;
   connectionType: 'usb-direct' | 'serial' | 'gpio' | 'simulated';
   usbPort: string;
+  isSimulationMode?: boolean;
+  hardwareStatus?: 'connected' | 'disconnected' | 'probing' | 'error';
+  hardwareError?: string;
+  linkLatencyMs?: number;
+}
+
+export interface LinkDiagnosticsLog {
+  id: string;
+  timestamp: string;
+  type: 'TX' | 'RX' | 'INFO' | 'ERROR';
+  command?: string;
+  rawHex?: string;
+  rawAscii?: string;
+  latencyMs?: number;
+  note?: string;
+}
+
+export interface HardwareLinkConfig {
+  simulationMode: boolean;
+  port: string;
+  baudRate: number;
+  protocol: 'PI30' | 'PI18' | 'PI16';
+  hidMode: '8byte' | 'stream';
+  timeoutMs: number;
+  pollingIntervalMs: number;
+  autoReconnect: boolean;
+}
+
+export interface LinkDiagnosticsStatus {
+  simulationMode: boolean;
+  devicePort: string;
+  baudRate: number;
+  protocol: string;
+  hardwareStatus: 'connected' | 'disconnected' | 'probing' | 'error';
+  lastProbeTimestamp: string;
+  lastValidResponseTimestamp: string | null;
+  latencyMs: number;
+  counters: {
+    queriesSent: number;
+    responsesReceived: number;
+    crcErrors: number;
+    timeouts: number;
+  };
+  availablePorts: string[];
+  detectedUsbDevices: string[];
+  permissions: {
+    canRead: boolean;
+    canWrite: boolean;
+    error?: string;
+  };
+  recentLogs: LinkDiagnosticsLog[];
+  lastParsedQPIGS?: Record<string, any>;
+  lastCommandResponse?: {
+    command: string;
+    rawHex: string;
+    rawAscii: string;
+    latencyMs: number;
+    validCrc: boolean;
+    parsedFields?: Record<string, any>;
+  };
 }
 
 export interface InverterTimerRule {

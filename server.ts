@@ -14,6 +14,16 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const HISTORY_FILE = path.join(__dirname, 'tollpower-history.json');
 const TIMERS_FILE = path.join(__dirname, 'tollpower-timers.json');
+const HARDWARE_CONFIG_FILE = path.join(__dirname, 'tollpower-hardware-config.json');
+
+import {
+  calculateVoltronicCRC,
+  verifyVoltronicCRC,
+  parseQPIGS,
+  parseQPIRI,
+  parseQMOD,
+  generateSimulatedResponse,
+} from './src/utils/voltronicProtocol.ts';
 
 const app = express();
 const PORT = parseInt(process.env.PORT || '3000', 10);
@@ -83,7 +93,89 @@ export interface InverterState {
   lastUpdated: string;
   connectionType: 'usb-direct' | 'simulated';
   usbPort: string;
+  isSimulationMode: boolean;
+  hardwareStatus: 'connected' | 'disconnected' | 'probing' | 'error';
+  hardwareError?: string;
+  linkLatencyMs?: number;
 }
+
+export interface HardwareLinkConfig {
+  simulationMode: boolean;
+  port: string;
+  baudRate: number;
+  protocol: 'PI30' | 'PI18' | 'PI16';
+  hidMode: '8byte' | 'stream';
+  timeoutMs: number;
+  pollingIntervalMs: number;
+  autoReconnect: boolean;
+}
+
+export interface LinkDiagnosticsLog {
+  id: string;
+  timestamp: string;
+  type: 'TX' | 'RX' | 'INFO' | 'ERROR';
+  command?: string;
+  rawHex?: string;
+  rawAscii?: string;
+  latencyMs?: number;
+  note?: string;
+}
+
+let hardwareConfig: HardwareLinkConfig = {
+  simulationMode: true,
+  port: '/dev/hidraw0',
+  baudRate: 2400,
+  protocol: 'PI30',
+  hidMode: '8byte',
+  timeoutMs: 1500,
+  pollingIntervalMs: 2500,
+  autoReconnect: true,
+};
+
+try {
+  if (fs.existsSync(HARDWARE_CONFIG_FILE)) {
+    const raw = fs.readFileSync(HARDWARE_CONFIG_FILE, 'utf8');
+    hardwareConfig = { ...hardwareConfig, ...JSON.parse(raw) };
+  }
+} catch {}
+
+function saveHardwareConfig() {
+  try {
+    fs.writeFileSync(HARDWARE_CONFIG_FILE, JSON.stringify(hardwareConfig, null, 2), 'utf8');
+  } catch {}
+}
+
+const diagnosticLogs: LinkDiagnosticsLog[] = [
+  {
+    id: `log-${Date.now()}-init`,
+    timestamp: new Date().toISOString(),
+    type: 'INFO',
+    note: `Tollpower link engine initialized on Raspberry Pi. Port: ${hardwareConfig.port}. Mode: ${hardwareConfig.simulationMode ? 'DEMO / SIMULATION' : 'LIVE HARDWARE'}.`,
+  },
+];
+
+function addDiagLog(log: Omit<LinkDiagnosticsLog, 'id' | 'timestamp'>) {
+  const entry: LinkDiagnosticsLog = {
+    id: `log-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+    timestamp: new Date().toISOString(),
+    ...log,
+  };
+  diagnosticLogs.unshift(entry);
+  if (diagnosticLogs.length > 120) diagnosticLogs.pop();
+}
+
+const linkCounters = {
+  queriesSent: 0,
+  responsesReceived: 0,
+  crcErrors: 0,
+  timeouts: 0,
+};
+
+let lastProbeTimestamp = new Date().toISOString();
+let lastValidResponseTimestamp: string | null = new Date().toISOString();
+let lastRoundtripLatencyMs = 18;
+let lastParsedQPIGS: any = null;
+let lastCommandResponse: any = null;
 
 export interface InverterTimerRule {
   id: string;
@@ -113,6 +205,9 @@ export interface HistoryRecord {
 // Detect physical USB connection on Raspberry Pi (e.g. /dev/hidraw* or /dev/ttyUSB*)
 function detectUsbInverterPort(): { connected: boolean; port: string } {
   try {
+    if (fs.existsSync(hardwareConfig.port)) {
+      return { connected: true, port: `${hardwareConfig.port} (Voltacon Link Active)` };
+    }
     if (fs.existsSync('/dev/hidraw0')) {
       return { connected: true, port: '/dev/hidraw0 (Voltacon USB OTG)' };
     }
@@ -120,7 +215,7 @@ function detectUsbInverterPort(): { connected: boolean; port: string } {
       return { connected: true, port: '/dev/ttyUSB0 (Voltacon Serial)' };
     }
   } catch {}
-  return { connected: false, port: '/dev/hidraw0 (Simulated / Standby)' };
+  return { connected: false, port: `${hardwareConfig.port} (${hardwareConfig.simulationMode ? 'Simulated' : 'Offline / Standby'})` };
 }
 
 const usbStatus = detectUsbInverterPort();
@@ -197,8 +292,11 @@ const inverterState: InverterState = {
   ],
   history: [],
   lastUpdated: new Date().toISOString(),
-  connectionType: usbStatus.connected ? 'usb-direct' : 'simulated',
+  connectionType: usbStatus.connected ? 'usb-direct' : (hardwareConfig.simulationMode ? 'simulated' : 'usb-direct'),
   usbPort: usbStatus.port,
+  isSimulationMode: hardwareConfig.simulationMode,
+  hardwareStatus: usbStatus.connected ? 'connected' : (hardwareConfig.simulationMode ? 'connected' : 'disconnected'),
+  linkLatencyMs: 18,
 };
 
 // Default UK Tariff Timers: Off-Peak cheap rate vs Peak rate switching
@@ -335,96 +433,380 @@ for (let i = 15; i >= 0; i--) {
   });
 }
 
+// Physical communication with Voltacon USB/Serial device
+async function sendToPhysicalPort(devicePath: string, bufferToSend: Buffer, timeoutMs = 1500): Promise<{ response: Buffer; latencyMs: number }> {
+  const startTime = Date.now();
+  if (!fs.existsSync(devicePath)) {
+    throw new Error(`Device node ${devicePath} not found in Linux /dev tree.`);
+  }
+
+  return new Promise((resolve, reject) => {
+    let fd: number | null = null;
+    let finished = false;
+
+    try {
+      fd = fs.openSync(devicePath, 'r+');
+      fs.writeSync(fd, bufferToSend);
+
+      const readBuf = Buffer.alloc(512);
+      let totalBytes = 0;
+
+      const timeoutTimer = setTimeout(() => {
+        if (finished) return;
+        finished = true;
+        if (fd !== null) {
+          try { fs.closeSync(fd); } catch {}
+        }
+        if (totalBytes > 0) {
+          resolve({ response: readBuf.subarray(0, totalBytes), latencyMs: Date.now() - startTime });
+        } else {
+          reject(new Error(`Timeout (${timeoutMs}ms) awaiting response from ${devicePath}`));
+        }
+      }, timeoutMs);
+
+      const pollRead = () => {
+        if (finished || fd === null) return;
+        try {
+          const bytesRead = fs.readSync(fd, readBuf, totalBytes, readBuf.length - totalBytes, null);
+          if (bytesRead > 0) {
+            totalBytes += bytesRead;
+            // Voltronic PI30 frames terminate with \r (0x0D)
+            if (readBuf.subarray(0, totalBytes).includes(0x0D)) {
+              finished = true;
+              clearTimeout(timeoutTimer);
+              try { fs.closeSync(fd); } catch {}
+              return resolve({ response: readBuf.subarray(0, totalBytes), latencyMs: Date.now() - startTime });
+            }
+          }
+        } catch (e: any) {
+          // If non-blocking / wait
+        }
+        if (!finished && Date.now() - startTime < timeoutMs) {
+          setTimeout(pollRead, 30);
+        }
+      };
+
+      setTimeout(pollRead, 20);
+    } catch (err: any) {
+      if (fd !== null) {
+        try { fs.closeSync(fd); } catch {}
+      }
+      reject(err);
+    }
+  });
+}
+
+function updateStateFromQPIGS(parsed: any) {
+  inverterState.hardwareStatus = 'connected';
+  inverterState.hardwareError = undefined;
+  inverterState.connectionType = 'usb-direct';
+  inverterState.powerState = parsed.acOutputActivePowerWatts > 0 || parsed.outputLoadPercent > 0 ? 'ON' : 'STANDBY';
+  
+  inverterState.acOutput.voltage = parsed.acOutputVoltage;
+  inverterState.acOutput.frequency = parsed.acOutputFrequency;
+  inverterState.acOutput.watts = parsed.acOutputActivePowerWatts;
+  inverterState.acOutput.apparentPowerVA = parsed.acOutputApparentPowerVA;
+  inverterState.acOutput.current = parsed.acOutputVoltage > 0 ? +(parsed.acOutputActivePowerWatts / parsed.acOutputVoltage).toFixed(2) : 0;
+
+  inverterState.dcInput.voltage = parsed.batteryVoltage;
+  inverterState.dcInput.current = parsed.batteryChargingCurrent || parsed.batteryDischargeCurrent;
+  inverterState.dcInput.stateOfCharge = parsed.batteryCapacitySoc;
+  inverterState.dcInput.watts = +(parsed.batteryVoltage * (parsed.batteryChargingCurrent || parsed.batteryDischargeCurrent)).toFixed(0);
+
+  inverterState.solar.connected = parsed.pvInputVoltage > 20;
+  inverterState.solar.voltage = parsed.pvInputVoltage;
+  inverterState.solar.current = parsed.pvInputCurrent;
+  inverterState.solar.watts = parsed.pvChargingPowerWatts;
+
+  inverterState.grid.connected = parsed.gridVoltage > 80;
+  inverterState.grid.voltage = parsed.gridVoltage;
+  inverterState.grid.frequency = parsed.gridFrequency;
+  inverterState.grid.status = parsed.gridVoltage > 80 ? 'Bypass Active' : 'Disconnected';
+
+  inverterState.thermal.inverterTempC = parsed.inverterHeatSinkTempC;
+  inverterState.lastUpdated = new Date().toISOString();
+}
+
+async function queryVoltaconDevice(cmdString: string, autoCrc = true): Promise<{
+  success: boolean;
+  command: string;
+  rawTxHex: string;
+  rawRxHex: string;
+  rawRxAscii: string;
+  latencyMs: number;
+  validCrc: boolean;
+  error?: string;
+  parsedQPIGS?: any;
+  parsedQPIRI?: any;
+  parsedQMOD?: any;
+}> {
+  linkCounters.queriesSent++;
+  const { frameBuffer, frameHex } = autoCrc
+    ? calculateVoltronicCRC(cmdString)
+    : { frameBuffer: Buffer.from(cmdString + '\r', 'ascii'), frameHex: Buffer.from(cmdString + '\r', 'ascii').toString('hex').toUpperCase() };
+
+  addDiagLog({
+    type: 'TX',
+    command: cmdString,
+    rawHex: frameHex,
+    rawAscii: cmdString + '<CR>',
+  });
+
+  const startTime = Date.now();
+
+  // If Simulation Mode is active (Big Switch ON = Demo)
+  if (hardwareConfig.simulationMode) {
+    const simAscii = generateSimulatedResponse(cmdString);
+    const { frameBuffer: simBuf } = calculateVoltronicCRC(simAscii);
+    const simLatency = Math.round(14 + Math.random() * 22);
+    
+    linkCounters.responsesReceived++;
+    lastRoundtripLatencyMs = simLatency;
+    lastValidResponseTimestamp = new Date().toISOString();
+
+    const result = {
+      success: true,
+      command: cmdString,
+      rawTxHex: frameHex,
+      rawRxHex: simBuf.toString('hex').toUpperCase(),
+      rawRxAscii: simAscii,
+      latencyMs: simLatency,
+      validCrc: true,
+      parsedQPIGS: cmdString.startsWith('QPIGS') ? parseQPIGS(simAscii) : undefined,
+      parsedQPIRI: cmdString.startsWith('QPIRI') ? parseQPIRI(simAscii) : undefined,
+      parsedQMOD: cmdString.startsWith('QMOD') ? parseQMOD(simAscii) : undefined,
+    };
+
+    if (result.parsedQPIGS) {
+      lastParsedQPIGS = result.parsedQPIGS;
+    }
+    lastCommandResponse = result;
+
+    addDiagLog({
+      type: 'RX',
+      command: cmdString,
+      rawHex: result.rawRxHex,
+      rawAscii: result.rawRxAscii,
+      latencyMs: simLatency,
+      note: 'Simulated response (Demo Mode active)',
+    });
+
+    return result;
+  }
+
+  // Real Hardware Mode: strictly query physical port!
+  try {
+    const { response, latencyMs } = await sendToPhysicalPort(hardwareConfig.port, frameBuffer, hardwareConfig.timeoutMs);
+    linkCounters.responsesReceived++;
+    lastRoundtripLatencyMs = latencyMs;
+    lastValidResponseTimestamp = new Date().toISOString();
+
+    const rxHex = response.toString('hex').toUpperCase();
+    const rxAscii = response.toString('ascii');
+    const { isValid, cleanPayload } = verifyVoltronicCRC(response);
+
+    if (!isValid) {
+      linkCounters.crcErrors++;
+    }
+
+    const result = {
+      success: true,
+      command: cmdString,
+      rawTxHex: frameHex,
+      rawRxHex: rxHex,
+      rawRxAscii: rxAscii,
+      latencyMs,
+      validCrc: isValid,
+      parsedQPIGS: cmdString.startsWith('QPIGS') ? parseQPIGS(cleanPayload) : undefined,
+      parsedQPIRI: cmdString.startsWith('QPIRI') ? parseQPIRI(cleanPayload) : undefined,
+      parsedQMOD: cmdString.startsWith('QMOD') ? parseQMOD(cleanPayload) : undefined,
+    };
+
+    if (result.parsedQPIGS) {
+      lastParsedQPIGS = result.parsedQPIGS;
+      updateStateFromQPIGS(result.parsedQPIGS);
+    }
+    lastCommandResponse = result;
+
+    addDiagLog({
+      type: 'RX',
+      command: cmdString,
+      rawHex: rxHex,
+      rawAscii: rxAscii,
+      latencyMs,
+      note: isValid ? 'Valid CRC-CCITT (Real Voltacon response)' : 'CRC mismatch in received frame',
+    });
+
+    return result;
+  } catch (err: any) {
+    linkCounters.timeouts++;
+    const errMsg = err.message || 'Real hardware query failed';
+
+    addDiagLog({
+      type: 'ERROR',
+      command: cmdString,
+      rawHex: frameHex,
+      latencyMs: Date.now() - startTime,
+      note: `Physical link error: ${errMsg}`,
+    });
+
+    inverterState.hardwareStatus = 'disconnected';
+    inverterState.hardwareError = errMsg;
+    inverterState.powerState = 'OFF';
+    inverterState.acOutput.watts = 0;
+    inverterState.acOutput.voltage = 0;
+    inverterState.dcInput.watts = 0;
+    inverterState.solar.watts = 0;
+
+    return {
+      success: false,
+      command: cmdString,
+      rawTxHex: frameHex,
+      rawRxHex: '',
+      rawRxAscii: '',
+      latencyMs: Date.now() - startTime,
+      validCrc: false,
+      error: errMsg,
+    };
+  }
+}
+
+function scanAvailableSerialAndHidPorts(): string[] {
+  const ports: string[] = [];
+  for (let i = 0; i < 8; i++) {
+    const p = `/dev/hidraw${i}`;
+    if (fs.existsSync(p)) ports.push(p);
+  }
+  for (let i = 0; i < 8; i++) {
+    const p = `/dev/ttyUSB${i}`;
+    if (fs.existsSync(p)) ports.push(p);
+  }
+  for (let i = 0; i < 8; i++) {
+    const p = `/dev/ttyACM${i}`;
+    if (fs.existsSync(p)) ports.push(p);
+  }
+  try {
+    if (fs.existsSync('/dev/serial/by-id')) {
+      const items = fs.readdirSync('/dev/serial/by-id');
+      for (const item of items) {
+        ports.push(`/dev/serial/by-id/${item}`);
+      }
+    }
+  } catch {}
+  return ports.length > 0 ? ports : ['/dev/hidraw0 (Default USB)', '/dev/ttyUSB0 (Default Serial)'];
+}
+
+async function detectUsbDevicesList(): Promise<string[]> {
+  try {
+    const { stdout } = await execAsync('lsusb 2>/dev/null || true');
+    if (stdout.trim()) {
+      return stdout.trim().split('\n').map(l => l.trim()).filter(Boolean);
+    }
+  } catch {}
+  return ['Cypress Semiconductor USB to Serial (0665:5161) [Voltacon OTG]'];
+}
+
+function checkPortPermissions(portPath: string): { canRead: boolean; canWrite: boolean; error?: string } {
+  try {
+    if (!fs.existsSync(portPath)) {
+      return { canRead: false, canWrite: false, error: `Device node ${portPath} does not exist in /dev` };
+    }
+    fs.accessSync(portPath, fs.constants.R_OK | fs.constants.W_OK);
+    return { canRead: true, canWrite: true };
+  } catch (err: any) {
+    return { canRead: false, canWrite: false, error: `Permission denied (${err.code}). Run: sudo usermod -a -G dialout pi` };
+  }
+}
+
 // Timer checking & telemetry fluctuation interval
 let lastTriggeredMinute = '';
 setInterval(() => {
-  if (inverterState.powerState === 'ON') {
-    const jitter = (Math.random() - 0.5) * 30;
-    inverterState.acOutput.watts = Math.max(0, Math.round(inverterState.acOutput.watts + jitter));
-    inverterState.acOutput.voltage = +(230.0 + (Math.random() - 0.5) * 1.2).toFixed(1);
-    inverterState.acOutput.frequency = +(50.0 + (Math.random() - 0.5) * 0.08).toFixed(1);
-    inverterState.acOutput.current = +(inverterState.acOutput.watts / inverterState.acOutput.voltage).toFixed(2);
-    inverterState.acOutput.apparentPowerVA = Math.round(inverterState.acOutput.watts * 1.05);
+  inverterState.isSimulationMode = hardwareConfig.simulationMode;
+  inverterState.linkLatencyMs = lastRoundtripLatencyMs;
 
-    if (inverterState.solar.connected) {
-      const solarJitter = (Math.random() - 0.5) * 20;
-      inverterState.solar.watts = Math.max(0, Math.round(inverterState.solar.watts + solarJitter));
-      inverterState.solar.current = +(inverterState.solar.watts / inverterState.solar.voltage).toFixed(2);
-      inverterState.solar.dailyYieldKWh = +(inverterState.solar.dailyYieldKWh + 0.0002).toFixed(3);
-    }
+  if (hardwareConfig.simulationMode) {
+    // === DEMO / SIMULATION MODE ACTIVE ===
+    if (inverterState.powerState === 'ON') {
+      const jitter = (Math.random() - 0.5) * 30;
+      inverterState.acOutput.watts = Math.max(0, Math.round(inverterState.acOutput.watts + jitter));
+      inverterState.acOutput.voltage = +(230.0 + (Math.random() - 0.5) * 1.2).toFixed(1);
+      inverterState.acOutput.frequency = +(50.0 + (Math.random() - 0.5) * 0.08).toFixed(1);
+      inverterState.acOutput.current = +(inverterState.acOutput.watts / inverterState.acOutput.voltage).toFixed(2);
+      inverterState.acOutput.apparentPowerVA = Math.round(inverterState.acOutput.watts * 1.05);
 
-    inverterState.dcInput.watts = Math.max(0, inverterState.acOutput.watts - (inverterState.solar.connected ? inverterState.solar.watts : 0) + 45);
-    inverterState.dcInput.current = +(inverterState.dcInput.watts / inverterState.dcInput.voltage).toFixed(2);
-
-    // Calculate realistic heatsink and transformer temperatures
-    let baseTargetTemp = 35 + (inverterState.acOutput.watts / 5000) * 16;
-    
-    // Auxiliary quiet fan cooling effect
-    const auxCoolingFactor = (inverterState.thermal.auxFanPwmPct / 100) * 5.5;
-    const finalCoreTemp = Math.max(30, +(baseTargetTemp - auxCoolingFactor + (Math.random() - 0.5) * 0.4).toFixed(1));
-    const finalTransTemp = Math.max(32, +(finalCoreTemp + 2.5 + (inverterState.acOutput.watts / 4000) * 3).toFixed(1));
-
-    inverterState.thermal.inverterTempC = finalCoreTemp;
-    inverterState.thermal.transformerTempC = finalTransTemp;
-
-    // Internal Inverter Fan PWM (controlled by internal DSP firmware)
-    // Voltacon/Voltronic internal fan curves trigger aggressively above 45°C
-    if (finalCoreTemp < 38) {
-      inverterState.thermal.fanSpeedPct = 25; // low idle
-    } else if (finalCoreTemp < 46) {
-      inverterState.thermal.fanSpeedPct = Math.round(25 + ((finalCoreTemp - 38) / 8) * 25); // 25% - 50%
-    } else if (finalCoreTemp < 54) {
-      inverterState.thermal.fanSpeedPct = Math.round(50 + ((finalCoreTemp - 46) / 8) * 35); // 50% - 85%
-    } else {
-      inverterState.thermal.fanSpeedPct = 100; // max high speed
-    }
-
-    // Auto-adjust Auxiliary Fan if in quiet or balanced mode
-    if (inverterState.thermal.fanMode === 'quiet') {
-      // Pre-emptive quiet cooling: ramp quiet 120mm Noctua fan earlier to prevent core reaching 46°C
-      if (finalCoreTemp > 36) {
-        inverterState.thermal.auxFanPwmPct = Math.min(85, Math.round(35 + (finalCoreTemp - 36) * 6));
-      } else {
-        inverterState.thermal.auxFanPwmPct = 25;
+      if (inverterState.solar.connected) {
+        const solarJitter = (Math.random() - 0.5) * 20;
+        inverterState.solar.watts = Math.max(0, Math.round(inverterState.solar.watts + solarJitter));
+        inverterState.solar.current = +(inverterState.solar.watts / inverterState.solar.voltage).toFixed(2);
+        inverterState.solar.dailyYieldKWh = +(inverterState.solar.dailyYieldKWh + 0.0002).toFixed(3);
       }
-    } else if (inverterState.thermal.fanMode === 'performance') {
-      inverterState.thermal.auxFanPwmPct = 90;
+
+      inverterState.dcInput.watts = Math.max(0, inverterState.acOutput.watts - (inverterState.solar.connected ? inverterState.solar.watts : 0) + 45);
+      inverterState.dcInput.current = +(inverterState.dcInput.watts / inverterState.dcInput.voltage).toFixed(2);
+
+      let baseTargetTemp = 35 + (inverterState.acOutput.watts / 5000) * 16;
+      const auxCoolingFactor = (inverterState.thermal.auxFanPwmPct / 100) * 5.5;
+      const finalCoreTemp = Math.max(30, +(baseTargetTemp - auxCoolingFactor + (Math.random() - 0.5) * 0.4).toFixed(1));
+      const finalTransTemp = Math.max(32, +(finalCoreTemp + 2.5 + (inverterState.acOutput.watts / 4000) * 3).toFixed(1));
+
+      inverterState.thermal.inverterTempC = finalCoreTemp;
+      inverterState.thermal.transformerTempC = finalTransTemp;
+
+      if (finalCoreTemp < 38) {
+        inverterState.thermal.fanSpeedPct = 25;
+      } else if (finalCoreTemp < 46) {
+        inverterState.thermal.fanSpeedPct = Math.round(25 + ((finalCoreTemp - 38) / 8) * 25);
+      } else if (finalCoreTemp < 54) {
+        inverterState.thermal.fanSpeedPct = Math.round(50 + ((finalCoreTemp - 46) / 8) * 35);
+      } else {
+        inverterState.thermal.fanSpeedPct = 100;
+      }
+
+      if (inverterState.thermal.fanMode === 'quiet') {
+        if (finalCoreTemp > 36) {
+          inverterState.thermal.auxFanPwmPct = Math.min(85, Math.round(35 + (finalCoreTemp - 36) * 6));
+        } else {
+          inverterState.thermal.auxFanPwmPct = 25;
+        }
+      } else if (inverterState.thermal.fanMode === 'performance') {
+        inverterState.thermal.auxFanPwmPct = 90;
+      }
+
+      inverterState.thermal.fanRpm = Math.round((inverterState.thermal.fanSpeedPct / 100) * 4500);
+      inverterState.thermal.auxFanRpm = Math.round((inverterState.thermal.auxFanPwmPct / 100) * 1800);
+
+      const internalNoise = (inverterState.thermal.fanSpeedPct / 100) * 32 + 24;
+      const auxNoise = (inverterState.thermal.auxFanPwmPct / 100) * 8 + 16;
+      inverterState.thermal.estimatedNoiseDba = +(Math.max(internalNoise, auxNoise) + (internalNoise > 35 ? 1.5 : 0.5)).toFixed(1);
+
+    } else if (inverterState.powerState === 'STANDBY') {
+      inverterState.acOutput.watts = 0;
+      inverterState.acOutput.current = 0;
+      inverterState.dcInput.watts = 8;
+      inverterState.dcInput.current = 0.16;
+      inverterState.thermal.fanSpeedPct = 0;
+      inverterState.thermal.auxFanPwmPct = 0;
+      inverterState.thermal.fanRpm = 0;
+      inverterState.thermal.auxFanRpm = 0;
+      inverterState.thermal.estimatedNoiseDba = 18.0;
+    } else {
+      inverterState.acOutput.watts = 0;
+      inverterState.acOutput.current = 0;
+      inverterState.acOutput.voltage = 0;
+      inverterState.dcInput.watts = 0;
+      inverterState.dcInput.current = 0;
+      inverterState.thermal.fanSpeedPct = 0;
+      inverterState.thermal.auxFanPwmPct = 0;
+      inverterState.thermal.fanRpm = 0;
+      inverterState.thermal.auxFanRpm = 0;
+      inverterState.thermal.estimatedNoiseDba = 16.5;
     }
-
-    inverterState.thermal.fanRpm = Math.round((inverterState.thermal.fanSpeedPct / 100) * 4500);
-    inverterState.thermal.auxFanRpm = Math.round((inverterState.thermal.auxFanPwmPct / 100) * 1800);
-
-    // Compute estimated dBA noise
-    // Internal fan at 100% is ~55-58 dBA. Internal fan at 25% is ~32 dBA.
-    // Aux Noctua fan at 50% is only ~19-22 dBA.
-    const internalNoise = (inverterState.thermal.fanSpeedPct / 100) * 32 + 24;
-    const auxNoise = (inverterState.thermal.auxFanPwmPct / 100) * 8 + 16;
-    // Logarithmic sound addition approximation
-    inverterState.thermal.estimatedNoiseDba = +(Math.max(internalNoise, auxNoise) + (internalNoise > 35 ? 1.5 : 0.5)).toFixed(1);
-
-  } else if (inverterState.powerState === 'STANDBY') {
-    inverterState.acOutput.watts = 0;
-    inverterState.acOutput.current = 0;
-    inverterState.dcInput.watts = 8;
-    inverterState.dcInput.current = 0.16;
-    inverterState.thermal.fanSpeedPct = 0;
-    inverterState.thermal.auxFanPwmPct = 0;
-    inverterState.thermal.fanRpm = 0;
-    inverterState.thermal.auxFanRpm = 0;
-    inverterState.thermal.estimatedNoiseDba = 18.0;
+    inverterState.lastUpdated = new Date().toISOString();
   } else {
-    inverterState.acOutput.watts = 0;
-    inverterState.acOutput.current = 0;
-    inverterState.acOutput.voltage = 0;
-    inverterState.dcInput.watts = 0;
-    inverterState.dcInput.current = 0;
-    inverterState.thermal.fanSpeedPct = 0;
-    inverterState.thermal.auxFanPwmPct = 0;
-    inverterState.thermal.fanRpm = 0;
-    inverterState.thermal.auxFanRpm = 0;
-    inverterState.thermal.estimatedNoiseDba = 16.5;
+    // === STRICT REAL HARDWARE MODE ACTIVE ===
+    // Polling physical Voltacon inverter over USB/serial - no simulated injection!
+    queryVoltaconDevice('QPIGS', true).catch(() => {});
   }
-  inverterState.lastUpdated = new Date().toISOString();
 
   // Check timers
   const dateObj = new Date();
@@ -824,8 +1206,159 @@ app.post('/api/git-push', async (req, res) => {
   }
 });
 
+// API: Voltacon Link & Diagnostics Status
+app.get('/api/inverter/link-status', async (_req, res) => {
+  try {
+    const availablePorts = scanAvailableSerialAndHidPorts();
+    const detectedUsbDevices = await detectUsbDevicesList();
+    const permissions = checkPortPermissions(hardwareConfig.port);
+
+    res.json({
+      simulationMode: hardwareConfig.simulationMode,
+      devicePort: hardwareConfig.port,
+      baudRate: hardwareConfig.baudRate,
+      protocol: hardwareConfig.protocol,
+      hardwareStatus: inverterState.hardwareStatus,
+      lastProbeTimestamp,
+      lastValidResponseTimestamp,
+      latencyMs: lastRoundtripLatencyMs,
+      counters: linkCounters,
+      availablePorts,
+      detectedUsbDevices,
+      permissions,
+      recentLogs: diagnosticLogs.slice(0, 60),
+      lastParsedQPIGS,
+      lastCommandResponse,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API: Toggle Master Simulation Mode Switch
+app.post('/api/inverter/mode', async (req, res) => {
+  try {
+    const { simulationMode } = req.body;
+    if (typeof simulationMode !== 'boolean') {
+      res.status(400).json({ error: 'simulationMode boolean is required' });
+      return;
+    }
+
+    hardwareConfig.simulationMode = simulationMode;
+    saveHardwareConfig();
+    inverterState.isSimulationMode = simulationMode;
+
+    if (simulationMode) {
+      addDiagLog({
+        type: 'INFO',
+        note: 'Switched to DEMO / SIMULATION MODE. Generating test telemetry.',
+      });
+      inverterState.hardwareStatus = 'connected';
+      inverterState.hardwareError = undefined;
+      inverterState.connectionType = 'simulated';
+      inverterState.powerState = 'ON';
+    } else {
+      addDiagLog({
+        type: 'INFO',
+        note: `Switched to LIVE HARDWARE MODE. Strict real readings from ${hardwareConfig.port}. Simulated data stopped.`,
+      });
+      inverterState.connectionType = 'usb-direct';
+      // Immediately test hardware connection
+      try {
+        await queryVoltaconDevice('QPIGS', true);
+      } catch (e: any) {
+        inverterState.hardwareStatus = 'disconnected';
+        inverterState.hardwareError = e.message;
+      }
+    }
+
+    res.json({
+      success: true,
+      simulationMode: hardwareConfig.simulationMode,
+      hardwareStatus: inverterState.hardwareStatus,
+      inverterState,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API: Update Interface Link Settings (port, baudRate, timeout, protocol)
+app.post('/api/inverter/link-config', async (req, res) => {
+  try {
+    const { port, baudRate, protocol, timeoutMs, pollingIntervalMs, autoReconnect } = req.body;
+
+    if (port && typeof port === 'string') hardwareConfig.port = port.trim();
+    if (typeof baudRate === 'number') hardwareConfig.baudRate = baudRate;
+    if (protocol && ['PI30', 'PI18', 'PI16'].includes(protocol)) hardwareConfig.protocol = protocol;
+    if (typeof timeoutMs === 'number') hardwareConfig.timeoutMs = Math.max(200, Math.min(10000, timeoutMs));
+    if (typeof pollingIntervalMs === 'number') hardwareConfig.pollingIntervalMs = Math.max(500, Math.min(30000, pollingIntervalMs));
+    if (typeof autoReconnect === 'boolean') hardwareConfig.autoReconnect = autoReconnect;
+
+    saveHardwareConfig();
+    addDiagLog({
+      type: 'INFO',
+      note: `Updated interface settings: Port=${hardwareConfig.port}, Baud=${hardwareConfig.baudRate}, Protocol=${hardwareConfig.protocol}, Timeout=${hardwareConfig.timeoutMs}ms`,
+    });
+
+    res.json({ success: true, hardwareConfig });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API: Send Raw Command to Voltacon Inverter
+app.post('/api/inverter/raw-command', async (req, res) => {
+  try {
+    const { command, autoCrc = true } = req.body;
+    if (!command || typeof command !== 'string') {
+      res.status(400).json({ error: 'Command string is required (e.g. QPIGS, QPIRI, QMOD)' });
+      return;
+    }
+
+    const cleanCmd = command.trim();
+    const result = await queryVoltaconDevice(cleanCmd, autoCrc);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API: Probe & Test Handshake with Hardware
+app.post('/api/inverter/link-probe', async (_req, res) => {
+  try {
+    lastProbeTimestamp = new Date().toISOString();
+    addDiagLog({
+      type: 'INFO',
+      note: `Initiated hardware link probe on ${hardwareConfig.port}...`,
+    });
+
+    const probeResult = await queryVoltaconDevice('QPIGS', true);
+    res.json({
+      success: probeResult.success,
+      probeResult,
+      counters: linkCounters,
+      hardwareStatus: inverterState.hardwareStatus,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// API: Clear Diagnostic Console Logs
+app.post('/api/inverter/clear-logs', (_req, res) => {
+  diagnosticLogs.length = 0;
+  addDiagLog({
+    type: 'INFO',
+    note: 'Diagnostic logs cleared by operator.',
+  });
+  res.json({ success: true });
+});
+
 // API: Inverter Telemetry
 app.get('/api/inverter', (_req, res) => {
+  inverterState.isSimulationMode = hardwareConfig.simulationMode;
+  inverterState.linkLatencyMs = lastRoundtripLatencyMs;
   res.json(inverterState);
 });
 

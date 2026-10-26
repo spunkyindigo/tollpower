@@ -76,6 +76,13 @@ export const AtAGlanceDashboard: React.FC<AtAGlanceDashboardProps> = ({
               }`}>
                 {state.powerState}
               </span>
+              <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-full ${
+                state.isSimulationMode
+                  ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                  : 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+              }`}>
+                {state.isSimulationMode ? 'DEMO' : 'LIVE HW'}
+              </span>
               <span className="hidden md:inline-flex text-[10px] font-mono px-2 py-0.5 rounded-full bg-white/5 border border-white/10 text-slate-300">
                 Mode: {state.outputPriority}
               </span>
@@ -133,6 +140,22 @@ export const AtAGlanceDashboard: React.FC<AtAGlanceDashboardProps> = ({
           </button>
         </div>
       </div>
+
+      {/* Live Mode Hardware Offline Alert */}
+      {!state.isSimulationMode && state.hardwareStatus === 'disconnected' && (
+        <div className="bg-rose-950/30 border border-rose-500/40 rounded-2xl p-3 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 text-xs text-rose-300">
+          <div className="flex items-center space-x-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-rose-500 animate-ping shrink-0" />
+            <span><strong>Physical Inverter Disconnected:</strong> Live Hardware Mode is active with 0 simulated data. Connect Voltacon OTG cable to Raspberry Pi or toggle Demo Mode.</span>
+          </div>
+          <button
+            onClick={() => onNavigateTab('voltacon')}
+            className="px-3 py-1 bg-rose-500/20 hover:bg-rose-500/30 border border-rose-500/40 text-rose-200 text-xs font-semibold rounded-lg shrink-0"
+          >
+            Voltacon Link & Settings →
+          </button>
+        </div>
+      )}
 
       {/* 2. The 4 Essential Headlines (No scrolling required) */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4 flex-1">

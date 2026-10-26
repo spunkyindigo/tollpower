@@ -7,6 +7,7 @@ export interface FeatureFlags {
   ambientSensors: boolean;    // Requires DS18B20 1-Wire external temp probes
   
   // Software modules
+  voltaconLink: boolean;      // Voltacon connection debugger, link settings & live/demo switch
   timersAndModes: boolean;    // Inverter SBU/CSO scheduling
   longTermAnalytics: boolean; // 30-day analytics and cost-saving metrics
   setupGuide: boolean;        // Pi hardware setup and wiring documentation
@@ -27,6 +28,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
     fanNoiseAcoustics: false,  // Disabled by default on baseline Pi + Voltacon setup
     externalRelays: false,     // Disabled by default (only pure inverter direct controls)
     ambientSensors: false,     // Disabled by default
+    voltaconLink: true,        // Dedicated Voltacon interface & diagnostics tab
     timersAndModes: true,
     longTermAnalytics: true,
     setupGuide: true,

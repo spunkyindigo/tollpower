@@ -6,6 +6,7 @@ import { TimersAndModesStudio } from './components/TimersAndModesStudio';
 import { LongTermAnalytics } from './components/LongTermAnalytics';
 import { PiHowToGuide } from './components/PiHowToGuide';
 import { AppSettingsComponent } from './components/AppSettings';
+import { VoltaconLinkDiagnostics } from './components/VoltaconLinkDiagnostics';
 import { QrCodeModal } from './components/QrCodeModal';
 import { GitPushModal } from './components/GitPushModal';
 import { InverterState, InverterTimerRule, AnalyticsData, SystemInfo, GitStatus } from './types/tollpower';
@@ -317,6 +318,14 @@ export default function App() {
             onControl={handleControl}
             onNavigateTab={setActiveTab}
             onRefresh={handleManualRefresh}
+          />
+        )}
+
+        {/* Dedicated Voltacon Hardware Connection & Diagnostics Tab */}
+        {activeTab === 'voltacon' && (
+          <VoltaconLinkDiagnostics
+            inverterState={inverterState}
+            onRefreshTelemetry={handleManualRefresh}
           />
         )}
 
